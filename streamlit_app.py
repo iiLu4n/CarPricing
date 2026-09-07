@@ -1,6 +1,8 @@
 from pathlib import Path
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 # -----------------------------------------------------------------------------
@@ -222,10 +224,8 @@ with col_g1:
 with col_g2:
     st.markdown("#### 📈 Evolução de Ticket Médio por Ano e Combustível")
     if not df_filtrado.empty:
-        # Agrupa os dados para gerar a curva temporal
         df_ano_comb = df_filtrado.groupby(['Ano', 'Combustivel'])['Preco'].mean().reset_index().sort_values('Ano')
         
-        # Criação do gráfico de linha com visualização unificada (Hover Mode) e linhas suavizadas (spline)
         fig_linha = px.line(
             df_ano_comb, x="Ano", y="Preco", color="Combustivel",
             markers=True, template="plotly_dark",
@@ -237,6 +237,55 @@ with col_g2:
             hovermode="x unified", transition_duration=500, margin=dict(t=10)
         )
         st.plotly_chart(fig_linha, use_container_width=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# Novo Gráfico Dual: Volume de Modelos x Média de KM por Ano
+# -----------------------------------------------------------------------------
+st.markdown("#### 🛣️ Relação Volume de Ativos x Desgaste (KM) por Ano")
+if not df_filtrado.empty:
+    df_ano_metricas = df_filtrado.groupby('Ano').agg(
+        Volume=('Modelo', 'count'),
+        KM_Medio=('KM_Int', 'mean')
+    ).reset_index().sort_values('Ano')
+    
+    fig_dual = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    fig_dual.add_trace(
+        go.Scatter(
+            x=df_ano_metricas['Ano'], y=df_ano_metricas['Volume'],
+            name="Volume de Ativos", mode='lines+markers',
+            line=dict(shape='spline', width=3, color='#3b82f6'),
+            marker=dict(size=8)
+        ),
+        secondary_y=False,
+    )
+    
+    fig_dual.add_trace(
+        go.Scatter(
+            x=df_ano_metricas['Ano'], y=df_ano_metricas['KM_Medio'],
+            name="KM Médio", mode='lines+markers',
+            line=dict(shape='spline', width=3, color='#10b981'),
+            marker=dict(size=8)
+        ),
+        secondary_y=True,
+    )
+    
+    fig_dual.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", 
+        plot_bgcolor="rgba(0,0,0,0)",
+        hovermode="x unified",
+        font_color="#ffffff",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(t=30, b=10)
+    )
+    
+    fig_dual.update_yaxes(title_text="Volume (Unidades)", secondary_y=False, showgrid=False, color='#3b82f6')
+    fig_dual.update_yaxes(title_text="KM Médio", secondary_y=True, showgrid=False, color='#10b981')
+    fig_dual.update_xaxes(showgrid=False)
+    
+    st.plotly_chart(fig_dual, use_container_width=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
