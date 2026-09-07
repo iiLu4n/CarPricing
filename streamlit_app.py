@@ -1,151 +1,206 @@
-import streamlit as st
-import pandas as pd
-import math
 from pathlib import Path
+import pandas as pd
+import streamlit as st
 
-# Set the title and favicon that appear in the Browser's tab bar.
+# Configuração da página do aplicativo
 st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
+    page_title="Radar de Luxo & Elétricos - Inteligência de Mercado",
+    page_icon="🏎️",
+    layout="wide",
 )
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
 
+# Função para carregar e tratar os dados de veículos com cache
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+def get_vehicle_data():
+  # Tenta encontrar o arquivo em diferentes caminhos comuns
+  caminhos_possiveis = [
+      Path(__file__).parent / "data/bmw_inteligencia_mercado_completo.csv",
+      Path(__file__).parent / "bmw_inteligencia_mercado_completo.csv",
+      Path("bmw_inteligencia_mercado_completo.csv"),
+  ]
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+  arquivo_encontrado = None
+  for caminho in caminhos_possiveis:
+    if caminho.exists():
+      arquivo_encontrado = caminho
+      break
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
+  if not arquivo_encontrado:
+    st.error(
+        "❌ Arquivo CSV não encontrado! Certifique-se de que o arquivo"
+        " 'bmw_inteligencia_mercado_completo.csv' está na raiz do projeto ou na"
+        " pasta data/."
     )
+    return pd.DataFrame()
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+  df = pd.read_csv(arquivo_encontrado)
 
-    return gdp_df
+  # Limpezas e tipagem de dados
+  df = df[df["Preco"] > 0].copy()
+  df["KM_Int"] = pd.to_numeric(
+      df["KM"].astype(str).str.replace(r"\D", "", regex=True), errors="coerce"
+  ).fillna(0)
+  df["Ano"] = pd.to_numeric(df["Ano"], errors="coerce").fillna(0)
 
-gdp_df = get_gdp_data()
+  # Cálculo do Preço Médio por Modelo para achar oportunidades (Benchmark interno)
+  df["Preco_Medio_Modelo"] = df.groupby("Modelo")["Preco"].transform("mean")
+  df["Desagio_Pct"] = (
+      1 - (df["Preco"] / df["Preco_Medio_Modelo"])
+  ) * 100
+
+  return df
+
+
+df = get_vehicle_data()
+
+# Se o DataFrame estiver vazio, interrompe a execução para evitar erros
+if df.empty:
+  st.stop()
 
 # -----------------------------------------------------------------------------
-# Draw the actual page
+# Interface do Dashboard - Topo
+# -----------------------------------------------------------------------------
+st.title("🏎️ Radar de Inteligência de Mercado: Luxo & Elétricos")
+st.markdown(
+    "Plataforma B2B de monitoramento de assimetria de preços, geolocalização e"
+    " oportunidades de arbitragem."
+)
+st.markdown("---")
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+# -----------------------------------------------------------------------------
+# Barra Lateral (Filtros Avançados)
+# -----------------------------------------------------------------------------
+st.sidebar.header("🔍 Filtros de Mercado")
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+modelos_disponiveis = sorted(df["Modelo"].dropna().unique().tolist())
+modelo_selecionado = st.sidebar.multiselect(
+    "Modelos de Veículos",
+    modelos_disponiveis,
+    default=modelos_disponiveis,
+)
 
-# Add some spacing
-''
-''
+municipios_disponiveis = sorted(df["Municipio"].dropna().unique().tolist())
+municipio_selecionado = st.sidebar.multiselect(
+    "Municípios / Praças",
+    municipios_disponiveis,
+    default=municipios_disponiveis,
+)
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
+min_ano = int(df["Ano"].min()) if df["Ano"].min() > 0 else 2020
+max_ano = int(df["Ano"].max()) if df["Ano"].max() > 0 else 2026
+anos_filtro = st.sidebar.slider(
+    "Ano do Veículo", min_value=min_ano, max_value=max_ano, value=[min_ano, max_ano]
+)
 
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
+# Aplicando os filtros
+df_filtrado = df[
+    (df["Modelo"].isin(modelo_selecionado))
+    & (df["Municipio"].isin(municipio_selecionado))
+    & (df["Ano"] >= anos_filtro[0])
+    & (df["Ano"] <= anos_filtro[1])
 ]
 
-st.header('GDP over time', divider='gray')
+# -----------------------------------------------------------------------------
+# Métricas Executivas (KPIs de Alto Impacto)
+# -----------------------------------------------------------------------------
+st.subheader("📊 Indicadores Chave de Desempenho (KPIs)")
 
-''
+col1, col2, col3, col4 = st.columns(4)
 
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
+total_veiculos = len(df_filtrado)
+preco_medio = df_filtrado["Preco"].mean() if total_veiculos > 0 else 0
+oportunidades_count = len(df_filtrado[df_filtrado["Desagio_Pct"] >= 10])
+bairros_atendidos = df_filtrado["Bairro"].nunique()
+
+col1.metric("Veículos Monitorados", f"{total_veiculos} un")
+col2.metric(
+    "Ticket Médio da Praça",
+    f"R$ {preco_medio:,.0f}".replace(",", "."),
+)
+col3.metric(
+    "Oportunidades de Arbitragem",
+    f"{oportunidades_count} carros",
+    help="Anúncios com mais de 10% de deságio em relação à média do modelo.",
+)
+col4.metric("Micro-Regiões (Bairros)", f"{bairros_atendidos} locais")
+
+st.markdown("---")
+
+# -----------------------------------------------------------------------------
+# Bloco 1: Alertas de Oportunidade
+# -----------------------------------------------------------------------------
+st.subheader("🔥 Alertas de Oportunidade de Arbitragem (Abaixo da Média)")
+st.markdown(
+    "Estes veículos estão anunciados significativamente abaixo da média de"
+    " mercado para o mesmo modelo."
 )
 
-''
-''
+df_oportunidades = df_filtrado[df_filtrado["Desagio_Pct"] >= 10].sort_values(
+    by="Desagio_Pct", ascending=False
+)
 
+if not df_oportunidades.empty:
+  for _, row in df_oportunidades.iterrows():
+    with st.container():
+      c1, c2, c3, c4 = st.columns([3, 1.5, 1.5, 1])
+      c1.markdown(f"**{row['Titulo']}**")
+      c2.markdown(
+          f"💰 **R$ {row['Preco']:,.0f}**".replace(",", ".")
+          + f" *({row['Desagio_Pct']:.1f}% abaixo)*"
+      )
+      c3.markdown(f"📍 {row['Bairro']}, {row['Municipio']}")
+      c4.markdown(f"[🔗 Ver Anúncio]({row['Link']})", unsafe_allow_html=True)
+      st.divider()
+else:
+  st.info(
+      "Nenhuma oportunidade extrema detectada com os filtros atuais. Tente"
+      " expandir a seleção na barra lateral."
+  )
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+# -----------------------------------------------------------------------------
+# Bloco 2: Gráficos de Análise
+# -----------------------------------------------------------------------------
+col_left, col_right = st.columns(2)
 
-st.header(f'GDP in {to_year}', divider='gray')
+with col_left:
+  st.subheader("📈 Preço Médio por Modelo")
+  if not df_filtrado.empty:
+    df_chart = (
+        df_filtrado.groupby("Modelo")["Preco"].mean().reset_index()
+    )
+    st.bar_chart(df_chart, x="Modelo", y="Preco", use_container_width=True)
+  else:
+    st.warning("Sem dados para exibir.")
 
-''
+with col_right:
+  st.subheader("🗺️ Concentração por Município")
+  if not df_filtrado.empty:
+    df_mun = df_filtrado["Municipio"].value_counts().reset_index()
+    df_mun.columns = ["Municipio", "Quantidade"]
+    st.bar_chart(df_mun, x="Municipio", y="Quantidade", use_container_width=True)
+  else:
+    st.warning("Sem dados para exibir.")
 
-cols = st.columns(4)
+st.markdown("---")
 
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+# -----------------------------------------------------------------------------
+# Bloco 3: Tabela Completa
+# -----------------------------------------------------------------------------
+st.subheader("📋 Inventário Completo Processado")
+colunas_exibicao = [
+    "Titulo",
+    "Preco",
+    "Ano",
+    "KM",
+    "Cambio",
+    "Combustivel",
+    "Municipio",
+    "Bairro",
+    "UnicoDono",
+    "IPVA_Pago",
+    "Link",
+]
+st.dataframe(
+    df_filtrado[colunas_exibicao], use_container_width=True, hide_index=True
+)
