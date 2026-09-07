@@ -9,7 +9,7 @@ import streamlit as st
 # Configuração da página (Premium Modern UI)
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="CarPricing | Luxury Market Analytics",
+    page_title="CarPricing",
     page_icon="🚘",
     layout="wide",
 )
