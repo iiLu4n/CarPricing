@@ -80,6 +80,12 @@ def get_premium_pricing_data():
     df["Ano"] = pd.to_numeric(df["Ano"], errors="coerce").fillna(0)
     df['Municipio'] = df['Municipio'].astype(str).str.strip()
     df['Opcionais'] = df['Opcionais'].fillna("N/A").astype(str)
+    
+    # Garantir que a coluna de Versão esteja bem tratada para o novo gráfico
+    if 'Versao' in df.columns:
+        df['Versao'] = df['Versao'].fillna("Não Informada").astype(str)
+    else:
+        df['Versao'] = "Única"
 
     caminho_geo = Path(__file__).parent / "data/municipios_coordenadas.csv"
     caminho_geo_fallback = Path("municipios_coordenadas_base.csv")
@@ -159,26 +165,30 @@ col3.metric("Desgaste Médio", f"{km_medio:,.0f} km".replace(",", "."))
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# Gráfico Interativo de Valoração por Modelo (Com Filtro Rerun)
+# 1. Gráfico Interativo: Volume por Modelo e Ano (Com Filtro Rerun)
 # -----------------------------------------------------------------------------
-st.markdown("#### 💎 Valoração por Modelo (Clique para aplicar filtro cruzado)")
+st.markdown("#### 💎 Dinâmica de Volume por Modelo e Ano (Clique na linha para filtrar)")
 
 if not df_filtrado.empty:
-    df_modelo_chart = df_filtrado.groupby("Modelo")["Preco"].mean().reset_index()
-    fig_model = px.bar(
-        df_modelo_chart, x="Modelo", y="Preco", text_auto=".2s", 
-        template="plotly_dark", color="Modelo",
+    df_vol_modelo = df_filtrado.groupby(["Ano", "Modelo"]).size().reset_index(name="Volume")
+    df_vol_modelo = df_vol_modelo.sort_values("Ano")
+
+    fig_vol_model = px.line(
+        df_vol_modelo, x="Ano", y="Volume", color="Modelo", 
+        markers=True, template="plotly_dark",
+        custom_data=["Modelo"], # Permite capturar o nome do modelo ao clicar
         color_discrete_sequence=px.colors.qualitative.Pastel
     )
-    fig_model.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False, 
-        transition_duration=500, margin=dict(t=10, b=10)
+    fig_vol_model.update_traces(line_shape='spline', line=dict(width=3), marker=dict(size=8, opacity=0.9))
+    fig_vol_model.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", 
+        hovermode="x unified", transition_duration=500, margin=dict(t=10, b=10)
     )
     
-    evento_clique = st.plotly_chart(fig_model, use_container_width=True, on_select="rerun", selection_mode="points")
+    evento_clique = st.plotly_chart(fig_vol_model, use_container_width=True, on_select="rerun", selection_mode="points")
     
     if len(evento_clique.selection.points) > 0:
-        modelo_selecionado_grafico = evento_clique.selection.points[0]["x"]
+        modelo_selecionado_grafico = evento_clique.selection.points[0]["customdata"][0]
         df_filtrado = df_filtrado[df_filtrado["Modelo"] == modelo_selecionado_grafico]
         st.success(f"Filtro Automático Ativo: {modelo_selecionado_grafico} (Limpe a seleção no gráfico para restaurar)")
 else:
@@ -187,7 +197,40 @@ else:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# Inteligência Geográfica (Mapa)
+# 2. Novo Gráfico Bem Estruturado: Treemap (Modelo > Versão > Ano)
+# -----------------------------------------------------------------------------
+st.markdown("#### 📑 Estrutura de Estoque: Categorização por Modelo, Versão e Ano")
+st.markdown("<p style='opacity: 0.8; font-size: 0.9rem; margin-top: -10px;'>A hierarquia dos blocos reflete a concentração de volume (quanto maior o bloco, maior o estoque na praça).</p>", unsafe_allow_html=True)
+
+if not df_filtrado.empty:
+    df_hierarquia = df_filtrado.groupby(["Modelo", "Versao", "Ano"]).size().reset_index(name="Volume")
+    
+    fig_tree = px.treemap(
+        df_hierarquia, 
+        path=["Modelo", "Versao", "Ano"], 
+        values="Volume",
+        color="Volume",
+        color_continuous_scale="Tealgrn",
+        template="plotly_dark"
+    )
+    
+    fig_tree.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", 
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(t=10, l=10, r=10, b=10)
+    )
+    
+    fig_tree.update_traces(
+        textinfo="label+value", 
+        hovertemplate="<b>%{label}</b><br>Volume: %{value}<extra></extra>"
+    )
+    
+    st.plotly_chart(fig_tree, use_container_width=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# Inteligência Geográfica (Mapa centralizado em SP por padrão)
 # -----------------------------------------------------------------------------
 st.markdown("#### 🗺️ Dispersão Geográfica e Fluxo de Capital")
 if not df_filtrado.empty:
@@ -195,7 +238,8 @@ if not df_filtrado.empty:
     fig_geo = px.scatter_map(
         df_mapa, lat="lat", lon="lon", size="Volume", color="Ticket_Medio",
         hover_name="Municipio", hover_data={"Volume": True, "Ticket_Medio": ":.2f", "lat": False, "lon": False},
-        color_continuous_scale="Tealgrn", zoom=6.5, height=450, map_style="carto-darkmatter"
+        color_continuous_scale="Tealgrn", zoom=6, height=450, map_style="carto-darkmatter",
+        center={"lat": -23.5505, "lon": -46.6333} # Garante a localização travada em São Paulo
     )
     fig_geo.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=10, b=0))
     st.plotly_chart(fig_geo, use_container_width=True)
@@ -226,22 +270,22 @@ with col_g2:
     if not df_filtrado.empty:
         df_ano_comb = df_filtrado.groupby(['Ano', 'Combustivel'])['Preco'].mean().reset_index().sort_values('Ano')
         
-        fig_linha = px.line(
+        fig_linha_preco = px.line(
             df_ano_comb, x="Ano", y="Preco", color="Combustivel",
             markers=True, template="plotly_dark",
             color_discrete_sequence=px.colors.qualitative.Safe
         )
-        fig_linha.update_traces(line_shape='spline', line=dict(width=3), marker=dict(size=8, opacity=0.9))
-        fig_linha.update_layout(
+        fig_linha_preco.update_traces(line_shape='spline', line=dict(width=3), marker=dict(size=8, opacity=0.9))
+        fig_linha_preco.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", 
             hovermode="x unified", transition_duration=500, margin=dict(t=10)
         )
-        st.plotly_chart(fig_linha, use_container_width=True)
+        st.plotly_chart(fig_linha_preco, use_container_width=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# Novo Gráfico Dual: Volume de Modelos x Média de KM por Ano
+# Gráfico Dual: Volume de Modelos x Média de KM por Ano
 # -----------------------------------------------------------------------------
 st.markdown("#### 🛣️ Relação Volume de Ativos x Desgaste (KM) por Ano")
 if not df_filtrado.empty:
